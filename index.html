@@ -1,0 +1,319 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>AIVC - Alzheimer's Neuron Morphology & Cross-Section</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #111115; color: #fff; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        #ui-container { position: absolute; bottom: 25px; left: 50%; transform: translateX(-50%); width: 95%; max-width: 1200px; background: rgba(20, 20, 25, 0.95); padding: 20px 30px; border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.1); box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.7); backdrop-filter: blur(10px); }
+        #top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        #stage-title { font-size: 18px; font-weight: 600; color: #fff; }
+        #slider { width: 100%; cursor: pointer; accent-color: #00ffcc; margin: 10px 0; }
+        #stats { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; margin-top: 12px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+        .metric { flex: 1 1 120px; background: rgba(255, 255, 255, 0.05); padding: 8px 10px; border-radius: 6px; border-left: 3px solid #00ffcc; }
+        .metric span { font-weight: bold; color: #00ffcc; display: block; font-size: 14px; margin-top: 2px; }
+        .toggle-container { display: flex; align-items: center; font-size: 14px; background: rgba(0, 255, 204, 0.1); padding: 6px 12px; border-radius: 20px; border: 1px solid #00ffcc; cursor: pointer; }
+        .toggle-container input { margin-right: 8px; cursor: pointer; }
+    </style>
+    <script src="https://unpkg.com/three@0.136.0/build/three.min.js"></script>
+    <script src="https://unpkg.com/three@0.136.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+
+    <div id="ui-container">
+        <div id="top-bar">
+            <div id="stage-title">Stage: <span id="val-stage" style="color: #00ffcc;">Normal</span></div>
+            <label class="toggle-container">
+                <input type="checkbox" id="clip-toggle" checked>
+                Cross-Section View
+            </label>
+        </div>
+        
+        <input type="range" id="slider" min="0" max="100" value="0">
+        
+        <div id="stats">
+            <div class="metric">Volume<span id="val-soma">100%</span></div>
+            <div class="metric">Dendrites<span id="val-dendrite">100%</span></div>
+            <div class="metric">Microtubules<span id="val-micro">100%</span></div>
+            <div class="metric">ER Stress<span id="val-er">0%</span></div>
+            <div class="metric">Mitochondria<span id="val-mito">Normal</span></div>
+            <div class="metric">Tau Tangles<span id="val-tau">0%</span></div>
+            <div class="metric">Plaques<span id="val-plaque">0%</span></div>
+        </div>
+    </div>
+
+    <script>
+        // 1. Scene, Camera & Clipping Setup
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 2, 16);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.localClippingEnabled = true; 
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.target.set(3, 0, 0); 
+
+        const crossSectionPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0.2);
+
+        const mainLight = new THREE.DirectionalLight(0xffffff, 1.2);
+        mainLight.position.set(5, 10, 15);
+        scene.add(mainLight);
+        scene.add(new THREE.AmbientLight(0x555566, 1.5));
+
+        // 2. Build Procedural Neuron Group
+        const neuronGroup = new THREE.Group();
+        scene.add(neuronGroup);
+
+        // A. Soma (Cell Body)
+        const somaGeo = new THREE.SphereGeometry(1.8, 64, 64);
+        const pos = somaGeo.attributes.position;
+        for (let i = 0; i < pos.count; i++) {
+            const v = new THREE.Vector3().fromBufferAttribute(pos, i);
+            const noise = (Math.sin(v.x * 3.5) + Math.cos(v.y * 3.5) + Math.sin(v.z * 3.5)) * 0.12;
+            v.multiplyScalar(1 + noise);
+            pos.setXYZ(i, v.x, v.y, v.z);
+        }
+        somaGeo.computeVertexNormals();
+        
+        const somaMat = new THREE.MeshStandardMaterial({ 
+            color: 0xcccccc, roughness: 0.6, metalness: 0.1,
+            side: THREE.DoubleSide, 
+            clippingPlanes: [crossSectionPlane] 
+        });
+        const somaMesh = new THREE.Mesh(somaGeo, somaMat);
+        neuronGroup.add(somaMesh);
+
+        // B. Nucleus
+        const nucleusGeo = new THREE.SphereGeometry(0.75, 32, 32);
+        const nucleusMat = new THREE.MeshStandardMaterial({
+            color: 0x663399,
+            roughness: 0.4,
+            side: THREE.DoubleSide,
+            clippingPlanes: [crossSectionPlane]
+        });
+        const nucleusMesh = new THREE.Mesh(nucleusGeo, nucleusMat);
+        somaMesh.add(nucleusMesh);
+
+        // C. Recursive Branching Function (Expanded for heavier terminal branching)
+        function createBranchTree(startPt, dir, length, radius, depth, parentGroup, isAxon) {
+            if (depth === 0) return;
+            const endPt = startPt.clone().add(dir.clone().multiplyScalar(length));
+            const midPt = startPt.clone().lerp(endPt, 0.5).add(
+                new THREE.Vector3((Math.random()-0.5)*length*0.4, (Math.random()-0.5)*length*0.4, (Math.random()-0.5)*length*0.4)
+            );
+
+            const curve = new THREE.CatmullRomCurve3([startPt, midPt, endPt]);
+            const tubeGeo = new THREE.TubeGeometry(curve, 16, radius, 8, false);
+            const mesh = new THREE.Mesh(tubeGeo, somaMat);
+            parentGroup.add(mesh);
+
+            if (depth === 1 && isAxon) {
+                const knobGeo = new THREE.SphereGeometry(radius * 2.5, 16, 16);
+                const knob = new THREE.Mesh(knobGeo, somaMat);
+                knob.position.copy(endPt);
+                parentGroup.add(knob);
+            }
+
+            // Increased sub-branching factor for denser terminal growth
+            const numBranches = 2;
+            for(let i = 0; i < numBranches; i++) {
+                const randomAxis = new THREE.Vector3(Math.random(), Math.random(), Math.random()).normalize();
+                const newDir = dir.clone().applyAxisAngle(randomAxis, (Math.random() * 1.5) - 0.75).normalize();
+                createBranchTree(endPt, newDir, length * 0.78, radius * 0.65, depth - 1, parentGroup, isAxon);
+            }
+        }
+
+        // D. Dendrites (Expanded count to 14 for richer, highly branched coverage)
+        const dendriteGroups = [];
+        for (let i = 0; i < 14; i++) {
+            const group = new THREE.Group();
+            let dir;
+            do {
+                dir = new THREE.Vector3((Math.random() - 0.5) * 2, (Math.random() - 0.5) * 2, (Math.random() - 0.5) * 2).normalize();
+            } while (dir.x > 0.2); 
+
+            createBranchTree(new THREE.Vector3(0,0,0), dir, 2.8, 0.22, 4, group, false);
+            neuronGroup.add(group);
+            dendriteGroups.push(group);
+        }
+
+        // E. The Axon & Myelin Sheaths
+        const axonGroup = new THREE.Group();
+        const axonCurve = new THREE.CatmullRomCurve3([
+            new THREE.Vector3(0, 0, 0), 
+            new THREE.Vector3(3, -0.2, 0.1), 
+            new THREE.Vector3(6, 0.2, -0.1),
+            new THREE.Vector3(9, -0.1, 0), 
+            new THREE.Vector3(12, 0, 0)
+        ]);
+        const axonGeo = new THREE.TubeGeometry(axonCurve, 64, 0.18, 12, false);
+        const axonMesh = new THREE.Mesh(axonGeo, somaMat);
+        axonGroup.add(axonMesh);
+
+        const numSheaths = 6;
+        for (let i = 1; i <= numSheaths; i++) {
+            const u = (i / (numSheaths + 1)) * 0.85; 
+            const pt = axonCurve.getPointAt(u);
+            const tangent = axonCurve.getTangentAt(u);
+            
+            const sheathGeo = new THREE.CylinderGeometry(0.35, 0.35, 1.0, 16);
+            const sheath = new THREE.Mesh(sheathGeo, somaMat);
+            sheath.position.copy(pt);
+            
+            const axis = new THREE.Vector3(0, 1, 0);
+            sheath.quaternion.setFromUnitVectors(axis, tangent);
+            axonGroup.add(sheath);
+        }
+
+        createBranchTree(new THREE.Vector3(12, 0, 0), new THREE.Vector3(1, 0, 0), 2.2, 0.18, 3, axonGroup, true);
+        neuronGroup.add(axonGroup);
+
+        // --- INTRACELLULAR COMPONENTS ---
+
+        // F. Endoplasmic Reticulum (ER)
+        const erGroup = new THREE.Group();
+        const erGeo = new THREE.TorusKnotGeometry(0.95, 0.12, 100, 16, 3, 7);
+        const erMat = new THREE.MeshStandardMaterial({ 
+            color: 0x4466ff, roughness: 0.6, side: THREE.DoubleSide, clippingPlanes: [crossSectionPlane]
+        });
+        const erMesh = new THREE.Mesh(erGeo, erMat);
+        erGroup.add(erMesh);
+        somaMesh.add(erGroup);
+
+        // G. Microtubules (Bundled tightly down the center of the axon/soma path)
+        const mtGroup = new THREE.Group();
+        const mtMat = new THREE.MeshStandardMaterial({ color: 0x00ffff, roughness: 0.2, clippingPlanes: [crossSectionPlane] });
+        const microtubules = [];
+        for(let i = 0; i < 15; i++) {
+            const mtGeo = new THREE.CylinderGeometry(0.015, 0.015, 3.0, 8);
+            const mt = new THREE.Mesh(mtGeo, mtMat);
+            // Tight cluster along the central core axis
+            mt.position.set((Math.random() - 0.5) * 0.2, (Math.random() - 0.5) * 0.2, (Math.random() - 0.5) * 2.0);
+            mt.rotation.set(0, 0, Math.PI / 2 + (Math.random()-0.5)*0.1); 
+            mtGroup.add(mt);
+            microtubules.push(mt);
+        }
+        somaMesh.add(mtGroup);
+
+        // H. Mitochondria
+        const mitoGroup = new THREE.Group();
+        const mitoGeo = new THREE.CylinderGeometry(0.08, 0.08, 0.4, 12);
+        const mitoMat = new THREE.MeshStandardMaterial({ color: 0x22cc22, roughness: 0.4, clippingPlanes: [crossSectionPlane] });
+        const mitochondria = [];
+        for (let i = 0; i < 25; i++) {
+            const mito = new THREE.Mesh(mitoGeo, mitoMat);
+            const r = Math.random() * 0.65 + 0.85; 
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.acos((Math.random() * 2) - 1);
+            mito.position.set(r * Math.sin(phi) * Math.cos(theta), r * Math.sin(phi) * Math.sin(theta), r * Math.cos(phi));
+            mito.rotation.set(Math.random()*Math.PI, Math.random()*Math.PI, 0);
+            mitoGroup.add(mito);
+            mitochondria.push(mito);
+        }
+        somaMesh.add(mitoGroup);
+
+        // I. Tau Tangles
+        const tangleGeo = new THREE.TorusKnotGeometry(1.05, 0.18, 120, 16);
+        const tangleMat = new THREE.MeshBasicMaterial({ color: 0xffaa00, wireframe: true, transparent: true, opacity: 0, clippingPlanes: [crossSectionPlane] });
+        const tangleMesh = new THREE.Mesh(tangleGeo, tangleMat);
+        somaMesh.add(tangleMesh);
+
+        // J. Extracellular Amyloid Plaques
+        const plaqueGroup = new THREE.Group();
+        scene.add(plaqueGroup);
+        const plaqueGeo = new THREE.DodecahedronGeometry(0.4, 1);
+        const plaqueMat = new THREE.MeshStandardMaterial({ color: 0xff3344, roughness: 0.9, clippingPlanes: [crossSectionPlane] });
+        const plaques = [];
+        for (let i = 0; i < 40; i++) {
+            const plaque = new THREE.Mesh(plaqueGeo, plaqueMat);
+            plaque.position.set((Math.random() - 0.2) * 18, (Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12);
+            plaque.scale.setScalar(0.01); 
+            plaqueGroup.add(plaque);
+            plaques.push(plaque);
+        }
+
+        // 3. UI Toggles & Slider Logic
+        document.getElementById('clip-toggle').addEventListener('change', (e) => {
+            renderer.localClippingEnabled = e.target.checked;
+        });
+
+        const slider = document.getElementById('slider');
+
+        async function updateSimulation(t) {
+            const response = await fetch(`/api/neuron-state/${t}`);
+            const data = await response.json();
+
+            // UI Data Updates
+            document.getElementById('val-stage').innerText = data.stage;
+            document.getElementById('val-soma').innerText = data.morphology.soma_volume_pct + '%';
+            document.getElementById('val-dendrite').innerText = data.morphology.dendritic_branching_pct + '%';
+            document.getElementById('val-plaque').innerText = data.extracellular.amyloid_beta_plaque_volume_pct + '%';
+            document.getElementById('val-tau').innerText = data.intracellular.neurofibrillary_tangle_load_pct + '%';
+            document.getElementById('val-micro').innerText = data.intracellular.microtubule_integrity_pct + '%';
+            document.getElementById('val-er').innerText = data.intracellular.er_golgi_stress_index + '%';
+            
+            const mitoFragPct = data.intracellular.mitochondrial_fragmentation_pct;
+            document.getElementById('val-mito').innerText = mitoFragPct < 20 ? "Healthy" : (mitoFragPct < 60 ? "Fragmenting" : "Failed");
+            document.getElementById('val-mito').style.color = mitoFragPct < 20 ? "#00ffcc" : (mitoFragPct < 60 ? "#ffcc00" : "#ff3333");
+
+            // Morphology Updates
+            const somaScale = data.morphology.soma_volume_pct / 100;
+            somaMesh.scale.setScalar(Math.max(0.1, somaScale));
+            
+            const branchScale = data.morphology.dendritic_branching_pct / 100;
+            dendriteGroups.forEach(group => { group.scale.setScalar(branchScale); group.visible = branchScale > 0.05; });
+            
+            axonGroup.scale.set(1.0, Math.max(0.15, branchScale), Math.max(0.15, branchScale));
+
+            // Pathology Updates
+            const plaqueLoad = data.extracellular.amyloid_beta_plaque_volume_pct / 100;
+            plaques.forEach((p, idx) => { p.scale.setScalar(idx / plaques.length < plaqueLoad ? 0.5 + plaqueLoad * 1.5 : 0.01); });
+
+            const tauLoad = data.intracellular.neurofibrillary_tangle_load_pct / 100;
+            tangleMat.opacity = tauLoad;
+            somaMat.color.setHSL(0.05, tauLoad * 0.5, 0.7 - (tauLoad * 0.5));
+
+            const mtIntegrity = data.intracellular.microtubule_integrity_pct / 100;
+            mtMat.color.setHSL(0.5, mtIntegrity, mtIntegrity * 0.5); 
+            microtubules.forEach(mt => {
+                mt.scale.set(1, Math.max(0.01, mtIntegrity), Math.max(0.1, mtIntegrity));
+                mt.visible = mtIntegrity > 0.05;
+            });
+
+            const erStress = data.intracellular.er_golgi_stress_index / 100;
+            erMat.color.setHSL(0.66 - (erStress * 0.66), 0.8, 0.5); 
+            erMesh.scale.setScalar(1 + (erStress * 0.5));
+
+            const mitoFrag = mitoFragPct / 100;
+            mitoMat.color.setHSL(0.33 - (mitoFrag * 0.25), 0.8, 0.4);
+            mitochondria.forEach(m => { m.scale.set(1 + mitoFrag, 1 - (mitoFrag * 0.7), 1 + mitoFrag); });
+        }
+
+        slider.addEventListener('input', (e) => updateSimulation(e.target.value));
+
+        // Render Loop
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+        updateSimulation(0);
+    </script>
+</body>
+</html>
+
+```
